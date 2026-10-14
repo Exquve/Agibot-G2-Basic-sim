@@ -27,6 +27,7 @@ from layout import (
     INCOMING_X1,
     OUT_SPEED,
     PALM,
+    PALM_SKIN,
     QUEUE_GAP,
     STOP_XY,
     belt_direction,
@@ -385,8 +386,8 @@ class SortShow:
         jacr = np.zeros((3, model.nv))
         bodies = (self.left_id, self.right_id)
         targets = (target_l, target_r)
-        step_limit = 0.048
-        orient = 0.14
+        step_limit = 0.040
+        orient = 0.35
         pos_error = 1.0
         elbows = (
             (self.left_elbow, self.left_shoulder, 1.0),
@@ -406,20 +407,20 @@ class SortShow:
                 rows.append(gain * jacp[:, self.ik_dadr])
                 errors.append(gain * delta)
                 rotation = scratch.xmat[body_id].reshape(3, 3)
-                # İnce yüz (yerel +Y) bavula bakar. Tam hizayı zorlamıyoruz;
-                # bileği ters çeviren çözüm kolu çapraz duruma sokuyordu.
-                axis = rotation[:, 1]
+                # Avuç içi (yerel +Z) bavula bakar. Parmaklar yerel +X ile yukarı durur.
+                axis = rotation[:, 2]
                 palm = palm / np.linalg.norm(palm)
                 tangent = palm - axis * float(np.dot(axis, palm))
                 axis_jac = np.cross(jacr[:, self.ik_dadr].T, axis).T
                 rows.append(orient * axis_jac)
                 errors.append(orient * tangent)
-                long_axis = rotation[:, 2]
-                into = float(np.dot(long_axis, palm))
-                if into > 0.0:
-                    parallel = np.cross(long_axis, palm) @ jacr[:, self.ik_dadr]
-                    rows.append(parallel.reshape(1, -1) * 1.15)
-                    errors.append(np.array([-1.15 * into]))
+                # Ağız dik kalsın; bilek kendi etrafında dönüp eli çevirmesin.
+                up_axis = rotation[:, 0]
+                upright = np.array([0.0, 0.0, 1.0])
+                up_err = upright - up_axis * float(np.dot(up_axis, upright))
+                up_jac = np.cross(jacr[:, self.ik_dadr].T, up_axis).T
+                rows.append(0.16 * up_jac)
+                errors.append(0.16 * up_err)
             for elbow_id, shoulder_id, sign in elbows:
                 mujoco.mj_jacBody(model, scratch, jacp, jacr, elbow_id)
                 elbow_jac = jacp[:, self.ik_dadr].copy()
@@ -462,6 +463,27 @@ class SortShow:
                     limb_jac[:, :4] = 0.0
                     rows.append(gain * limb_jac)
                     errors.append(gain * outward)
+                # Avuç derisi bavulun içinde kalmasın.
+                for body in (self.left_id, self.right_id):
+                    mujoco.mj_jacBody(model, scratch, jacp, jacr, body)
+                    rot = scratch.xmat[body].reshape(3, 3)
+                    offset = rot[:, 2] * PALM_SKIN
+                    tip = scratch.xpos[body] + offset
+                    dx = float(tip[0] - bag[0])
+                    dy = float(tip[1] - bag[1])
+                    if abs(dx) >= BAG_HALF[0] or abs(dy) >= BAG_HALF[1] or abs(float(tip[2]) - BAG_Z) > 0.16:
+                        continue
+                    penx = float(BAG_HALF[0] - abs(dx))
+                    peny = float(BAG_HALF[1] - abs(dy))
+                    if penx < peny:
+                        outward = np.array([(1.0 if dx >= 0.0 else -1.0), 0.0, 0.0]) * penx
+                    else:
+                        outward = np.array([0.0, (1.0 if dy >= 0.0 else -1.0), 0.0]) * peny
+                    tip_jac = jacp[:, self.ik_dadr] + np.cross(jacr[:, self.ik_dadr].T, offset).T
+                    tip_jac = tip_jac.copy()
+                    tip_jac[:, :4] = 0.0
+                    rows.append(4.0 * tip_jac)
+                    errors.append(4.0 * outward)
             # Bilekler birbirinin içinden geçmesin.
             mujoco.mj_jacBody(model, scratch, jacp, jacr, self.left_wrist)
             left_jac = jacp[:, self.ik_dadr].copy()
@@ -735,20 +757,22 @@ class SortShow:
         for axis in (0, 1):
             if force[axis] * float(direction[axis]) < 0.0:
                 force[axis] = 0.0
-        # X, bavulu köşegenin önüne kaçırmasın. Y yetişince ikisi birlikte gider.
+        # İtiş, duraktan bant ağzına giden çizgide kalsın. Çizgiden uzaklaşan pay silinir.
         goal = np.asarray(bag["gate"]["pushes"][0], dtype=float)
         start = np.asarray(STOP_XY, dtype=float)
         delta = goal - start
-        if abs(float(delta[1])) > 1e-4:
-            frac = (float(bag["pos"][1]) - float(start[1])) / float(delta[1])
-        else:
-            frac = 1.0
-        frac = float(np.clip(frac, 0.0, 1.0))
-        limit_x = float(start[0] + delta[0] * frac)
-        if float(delta[0]) >= 0.0 and float(bag["pos"][0]) > limit_x + 0.03:
-            force[0] = min(float(force[0]), 0.0)
-        elif float(delta[0]) < 0.0 and float(bag["pos"][0]) < limit_x - 0.03:
-            force[0] = max(float(force[0]), 0.0)
+        length = float(np.linalg.norm(delta))
+        if length > 1e-4:
+            hat = delta / length
+            rel = bag["pos"][:2] - start
+            along = float(np.dot(rel, hat))
+            off = rel - hat * along
+            span = float(np.linalg.norm(off))
+            if along < length and span > 0.035:
+                away = off / span
+                extra = float(np.dot(force, away))
+                if extra > 0.0:
+                    force = force - away * extra
         return force
 
     def _move_bags(self, dt):

@@ -10,9 +10,11 @@ import numpy as np
 BELT_TOP = 0.64
 BAG_HALF = np.array([0.25, 0.135, 0.12])
 BAG_Z = BELT_TOP + BAG_HALF[2] + 0.008
-# El merkezi yüzün bu kadar dışında durur. Avuç filesi merkezden ~5.6 cm taşar.
-PALM = 0.074
-GRIP_FACE = 0.056
+# OmniHand gövdesi bilek ağzındadır. Avuç derisi yerel +Z boyunca PALM_SKIN ileridedir.
+# Parmaklar yukarı bakar; el merkezi, avuç ortası bavulun göbeğine gelsin diye biraz alçaktır.
+PALM_SKIN = 0.045
+PALM = 0.056
+GRIP_FACE = 0.045
 
 # Düz kenarlar sağda ve solda. Sağ kenar giriş, sol kenar robotun yeri.
 # Çıkışlar çapraz köşelerden ayrılır; bavul başka bandın üstünden geçmez.
@@ -124,7 +126,7 @@ def hand_targets(bag_xy, direction):
     else:
         direction = direction / norm
     sign_y = 1.0 if direction[1] >= 0.0 else -1.0
-    hand_z = BAG_Z + 0.09
+    hand_z = BAG_Z - 0.055
     side_y = bag_xy[1] - sign_y * (BAG_HALF[1] + PALM)
     palm_y = np.array([0.0, sign_y, 0.0])
     face_x = bag_xy[0] - BAG_HALF[0] - PALM

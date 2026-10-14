@@ -238,6 +238,9 @@ def build_scene_xml(bag_count=4):
 
 
 def write_scene():
+    from omnihand import install_omnihand
+
+    install_omnihand()
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     xml, chevrons = build_scene_xml()
     SCENE_PATH.write_text(xml)
