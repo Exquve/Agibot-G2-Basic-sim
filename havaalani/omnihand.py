@@ -253,20 +253,32 @@ def _fmt(values):
     return " ".join(f"{float(value):.6f}" for value in values)
 
 
-def _write_hand(side, body_name, geoms, mount_x):
-    # Parmaklar önkolun devamı (link7 +X). Avuç içi kola dik, link7 +Z.
-    quat = np.array([1.0, 0.0, 0.0, 0.0])
+# Elin yerel eksenleri: +X avuç derisi (temas yüzü), +Z parmak uzantısı.
+# link7 çerçevesinde kol ekseni +X, yan eksen +Y, aşağı eksen -Z'dir.
+# Eskiden el birim duruşla bağlanıyordu: parmaklar yana, avuç kola bakıyordu;
+# yani bileğe 90 derece ters bağlıydı. Mount matrisi eli önkola paralel dizer:
+# sütunlar = [parmak ekseni, -avuç ekseni, kol ekseni] (link7 çerçevesinde).
+MOUNT_L = np.array([[0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+# Sağ kolda yan eksen gövdenin diğer tarafına bakar; avuç yine içe dönsün diye ayna.
+MOUNT_R = np.array([[0.0, 0.0, -1.0], [1.0, 0.0, 0.0], [0.0, -1.0, 0.0]])
+
+
+def _write_hand(side, body_name, geoms, mount_x, mount):
+    quat = _quat(mount)
+    # Geomlar artık montaj çerçevesine yazılır: r' = M^T r, t' = M^T t.
     lines = [
         f'<mujoco model="omnihand_{side}">',
         f'  <body name="{body_name}" pos="{mount_x:.4f} 0 0" quat="{_fmt(quat)}">',
         '    <inertial pos="0.04 0 0.015" mass="0.45" diaginertia="0.0012 0.0008 0.0006"/>',
     ]
     for rotation, origin, mesh_name in geoms:
+        local_rotation = mount.T @ rotation
+        local_origin = mount.T @ origin
         stem = mesh_name.replace(".stl", "")
         rgba = "0.08 0.08 0.09 1" if "palm" in stem else "0.14 0.14 0.15 1"
         lines.append(
             "    <geom type=\"mesh\" contype=\"0\" conaffinity=\"0\" group=\"1\" density=\"0\" "
-            f'mesh="omni_{stem}" pos="{_fmt(origin)}" quat="{_fmt(_quat(rotation))}" rgba="{rgba}"/>'
+            f'mesh="omni_{stem}" pos="{_fmt(local_origin)}" quat="{_fmt(_quat(local_rotation))}" rgba="{rgba}"/>'
         )
     lines.append("  </body>")
     lines.append("</mujoco>")
@@ -347,16 +359,17 @@ def install_omnihand():
     wrist = float(cloud[:, 0].min())
     mount_x = FLANGE_X - wrist + GAP
     _write_assets()
-    _write_hand("left", "gripper_l_center_link", left, mount_x)
-    _write_hand("right", "gripper_r_center_link", right, mount_x)
+    _write_hand("left", "gripper_l_center_link", left, mount_x, MOUNT_L)
+    _write_hand("right", "gripper_r_center_link", right, mount_x, MOUNT_R)
     _patch_g2()
     return {
         "reach": reach,
         "back": back,
         "wrist": wrist,
         "mount_x": mount_x,
+        # Yeni dik bileşkede avuç derisi elin yerel +X'inde; parmaklar +Z'de.
         "lift": float(np.median(palm[:, 0])),
-        "palm_reach": float(palm[:, 2].max()),
+        "palm_reach": float(cloud[:, 0].max()),
     }
 
 

@@ -126,7 +126,9 @@ def hand_targets(bag_xy, direction):
     else:
         direction = direction / norm
     sign_y = 1.0 if direction[1] >= 0.0 else -1.0
-    hand_z = BAG_Z - 0.055
+    # Avuç derisi yerel +Z'de; el merkezi bavul ortasından yarım deri aşağıda
+    # kalırsa temas noktası tam göbeğe denk gelir.
+    hand_z = BAG_Z - PALM_SKIN
     side_y = bag_xy[1] - sign_y * (BAG_HALF[1] + PALM)
     palm_y = np.array([0.0, sign_y, 0.0])
     face_x = bag_xy[0] - BAG_HALF[0] - PALM
