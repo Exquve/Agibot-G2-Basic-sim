@@ -338,13 +338,41 @@ def _patch_g2():
     )
 
 
-def install_omnihand():
+def _measure_fit(visuals, children):
+    cloud = _cloud(_collect(visuals, children, "L_palm", _solve(children, "L_palm")))
+    palm = _cloud(_collect(visuals, children, "L_palm", _solve(children, "L_palm")), palm_only=True)
+    reach = float(cloud[:, 2].max())
+    back = float(cloud[:, 2].min())
+    # Bilek, parmak ekseninin kol tarafındaki ucudur.
+    wrist = float(cloud[:, 0].min())
+    mount_x = FLANGE_X - wrist + GAP
+    return {
+        "reach": reach,
+        "back": back,
+        "wrist": wrist,
+        "mount_x": mount_x,
+        # Yeni dik bileşkede avuç derisi elin yerel +X'inde; parmaklar +Z'de.
+        "lift": float(np.median(palm[:, 0])),
+        "palm_reach": float(cloud[:, 0].max()),
+    }
+
+
+def install_omnihand(force=False):
     """Mesh'leri indirir, eli üretir ve G2 XML'ine bağlar. Ölçüleri döndürür."""
     marker = HAND / "left.xml"
     script = Path(__file__).resolve()
-    if marker.exists() and marker.stat().st_mtime >= script.stat().st_mtime and (HAND / "right.xml").exists():
+    fresh = (
+        marker.exists()
+        and marker.stat().st_mtime >= script.stat().st_mtime
+        and (HAND / "right.xml").exists()
+    )
+    if fresh and not force:
         _patch_g2()
-        return None
+        try:
+            visuals, children = _parse(HAND / "source.urdf")
+            return _measure_fit(visuals, children)
+        except Exception:
+            return None
     ensure_files()
     visuals, children = _parse(HAND / "source.urdf")
     left_angles = _solve(children, "L_palm")
@@ -375,7 +403,10 @@ def install_omnihand():
 
 if __name__ == "__main__":
     fit = install_omnihand()
-    print(
-        f"reach {fit['reach']:.4f}  palm {fit['palm_reach']:.4f}  wrist {fit['wrist']:.4f}  "
-        f"mount {fit['mount_x']:.4f}  lift {fit['lift']:.4f}"
-    )
+    if fit is None:
+        print("el zaten kurulu; ölçüm için kaynak URDF/mesh yok")
+    else:
+        print(
+            f"reach {fit['reach']:.4f}  palm {fit['palm_reach']:.4f}  wrist {fit['wrist']:.4f}  "
+            f"mount {fit['mount_x']:.4f}  lift {fit['lift']:.4f}"
+        )
