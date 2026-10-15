@@ -407,15 +407,16 @@ class SortShow:
                 rows.append(gain * jacp[:, self.ik_dadr])
                 errors.append(gain * delta)
                 rotation = scratch.xmat[body_id].reshape(3, 3)
-                # Avuç içi (yerel +Z) bavula bakar. Parmaklar yerel +X ile yukarı durur.
-                axis = rotation[:, 2]
+                # El dik bağlandı: avuç derisi yerel +X, parmaklar yerel +Z.
+                # Avuç içi (yerel +X) bavula bakar; parmaklar yerel +Z ile yukarı durur.
+                axis = rotation[:, 0]
                 palm = palm / np.linalg.norm(palm)
                 tangent = palm - axis * float(np.dot(axis, palm))
                 axis_jac = np.cross(jacr[:, self.ik_dadr].T, axis).T
                 rows.append(orient * axis_jac)
                 errors.append(orient * tangent)
                 # Ağız dik kalsın; bilek kendi etrafında dönüp eli çevirmesin.
-                up_axis = rotation[:, 0]
+                up_axis = rotation[:, 2]
                 upright = np.array([0.0, 0.0, 1.0])
                 up_err = upright - up_axis * float(np.dot(up_axis, upright))
                 up_jac = np.cross(jacr[:, self.ik_dadr].T, up_axis).T
@@ -463,11 +464,11 @@ class SortShow:
                     limb_jac[:, :4] = 0.0
                     rows.append(gain * limb_jac)
                     errors.append(gain * outward)
-                # Avuç derisi bavulun içinde kalmasın.
+                # Avuç derisi bavulun içinde kalmasın. Deri elin yerel +X'inde.
                 for body in (self.left_id, self.right_id):
                     mujoco.mj_jacBody(model, scratch, jacp, jacr, body)
                     rot = scratch.xmat[body].reshape(3, 3)
-                    offset = rot[:, 2] * PALM_SKIN
+                    offset = rot[:, 0] * PALM_SKIN
                     tip = scratch.xpos[body] + offset
                     dx = float(tip[0] - bag[0])
                     dy = float(tip[1] - bag[1])
@@ -726,32 +727,43 @@ class SortShow:
         bag["pos"][2] = BAG_Z
         bag["yaw"] = 0.0
 
+    def _contact_point(self, hand_pos, hand_rot, palm):
+        """Avucun bavula temas eden ön noktası: deri yüzeyinin ortası (yerel +X)."""
+        return np.asarray(hand_pos) + np.asarray(hand_rot)[:, 0] * PALM_SKIN
+
     def _push_force(self, bag):
-        _left, _right, palms = self._hand_targets()
         force = np.zeros(2)
         hands = (
-            (self.data.xpos[self.left_id], palms[0]),
-            (self.data.xpos[self.right_id], palms[1]),
+            (self.data.xpos[self.left_id], self.data.xmat[self.left_id].reshape(3, 3)),
+            (self.data.xpos[self.right_id], self.data.xmat[self.right_id].reshape(3, 3)),
         )
-        for hand, palm in hands:
-            if abs(float(hand[2]) - BAG_Z) > 0.22:
-                continue
+        gate = bag["gate"]
+        belt = belt_direction(gate) if gate is not None else np.zeros(2)
+        for hand, rotation in hands:
+            contact = self._contact_point(hand, rotation, None)
             for axis in (0, 1):
-                if abs(float(palm[axis])) < 0.5:
-                    continue
-                sign = 1.0 if palm[axis] > 0.0 else -1.0
+                # Temas noktası hangi yüzde? Yüz işaretini temastan al.
+                offset = float(contact[axis]) - float(bag["pos"][axis])
+                sign = 1.0 if offset >= 0.0 else -1.0
                 other = 1 - axis
-                if abs(float(hand[other]) - bag["pos"][other]) > BAG_HALF[other] + 0.12:
+                if abs(float(contact[other]) - float(bag["pos"][other])) > BAG_HALF[other] + 0.12:
                     continue
-                face = bag["pos"][axis] - sign * BAG_HALF[axis]
-                gap = sign * (face - float(hand[axis]))
-                # El yüzün içinden bakıyorsa bu itiş sayılmaz.
+                face = float(bag["pos"][axis]) - sign * float(BAG_HALF[axis])
+                gap = sign * (face - float(contact[axis]))
+                # Temas yüzü geçmişse (el bavulun içindeyse) bu itiş sayılmaz;
+                # geri emniyeti en fazla iki santim.
                 if gap < -0.02:
                     continue
-                clearance = gap - GRIP_FACE
+                # Sürtünme kaybı olmasın diye avuç yüze hafif gömülü durur.
+                clearance = gap - 0.01
                 if clearance > 0.06:
                     continue
-                force[axis] += sign * min(SLIDE_K * (0.06 - clearance), SLIDE_FMAX)
+                push = min(SLIDE_K * (0.06 - clearance), SLIDE_FMAX)
+                # Bavul banda bindiyse elle geri çekilmez.
+                if gate is not None and push * (-sign) * float(belt[axis]) > 0.0:
+                    if self._bag_on_belt(bag):
+                        continue
+                force[axis] += sign * push
         # El, bavulu bandın tersine itemez.
         direction = belt_direction(bag["gate"])
         for axis in (0, 1):
